@@ -141,11 +141,61 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_FILENAME
   | typeof DEFAULT_MEMORY_ALT_FILENAME;
 
+/**
+ * Controls when a workspace bootstrap file is injected into the context window.
+ * Can be specified via YAML frontmatter in the file itself:
+ *
+ * ```
+ * ---
+ * inject: heartbeat-only
+ * ---
+ * ```
+ *
+ * - `always` (default): injected on every run
+ * - `heartbeat-only`: only injected during heartbeat runs
+ * - `main-session-only`: not injected for subagent or cron sessions
+ * - `never`: never injected
+ */
+export type BootstrapFileInjectMode =
+  | "always"
+  | "heartbeat-only"
+  | "main-session-only"
+  | "never";
+
+const VALID_INJECT_MODES: ReadonlySet<string> = new Set<BootstrapFileInjectMode>([
+  "always",
+  "heartbeat-only",
+  "main-session-only",
+  "never",
+]);
+
+/**
+ * Parse the `inject:` field from YAML frontmatter at the top of a file.
+ * Returns `undefined` when no frontmatter is present or the value is unrecognised.
+ */
+export function parseInjectFrontmatter(content: string): BootstrapFileInjectMode | undefined {
+  const match = /^---\n([\s\S]*?)\n---/.exec(content);
+  if (!match) {
+    return undefined;
+  }
+  const injectMatch = /^inject:\s*(\S+)/m.exec(match[1]);
+  if (!injectMatch) {
+    return undefined;
+  }
+  const value = injectMatch[1].trim();
+  return VALID_INJECT_MODES.has(value) ? (value as BootstrapFileInjectMode) : undefined;
+}
+
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
   path: string;
   content?: string;
   missing: boolean;
+  /**
+   * Controls when this file is injected. Parsed from the file's YAML frontmatter.
+   * When `undefined`, defaults to `"always"`.
+   */
+  inject?: BootstrapFileInjectMode;
 };
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -531,11 +581,13 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
+      const inject = parseInjectFrontmatter(loaded.content);
       result.push({
         name: entry.name,
         path: entry.filePath,
         content: loaded.content,
         missing: false,
+        ...(inject !== undefined ? { inject } : {}),
       });
     } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });

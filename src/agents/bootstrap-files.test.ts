@@ -14,6 +14,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { parseInjectFrontmatter } from "./workspace.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
@@ -377,5 +378,157 @@ describe("resolveContextInjectionMode", () => {
         agents: { defaults: { contextInjection: "continuation-skip" } },
       } as never),
     ).toBe("continuation-skip");
+  });
+});
+
+describe("parseInjectFrontmatter", () => {
+  it("returns undefined when no frontmatter is present", () => {
+    expect(parseInjectFrontmatter("# HEARTBEAT.md\ncheck inbox")).toBeUndefined();
+  });
+
+  it("returns undefined when frontmatter has no inject field", () => {
+    expect(parseInjectFrontmatter("---\ntitle: test\n---\n# content")).toBeUndefined();
+  });
+
+  it("parses inject: always", () => {
+    expect(parseInjectFrontmatter("---\ninject: always\n---\n# content")).toBe("always");
+  });
+
+  it("parses inject: heartbeat-only", () => {
+    expect(parseInjectFrontmatter("---\ninject: heartbeat-only\n---\n# content")).toBe(
+      "heartbeat-only",
+    );
+  });
+
+  it("parses inject: main-session-only", () => {
+    expect(parseInjectFrontmatter("---\ninject: main-session-only\n---\n# content")).toBe(
+      "main-session-only",
+    );
+  });
+
+  it("parses inject: never", () => {
+    expect(parseInjectFrontmatter("---\ninject: never\n---\n# content")).toBe("never");
+  });
+
+  it("returns undefined for an unrecognised inject value (falls back to always)", () => {
+    expect(parseInjectFrontmatter("---\ninject: sometimes\n---\n# content")).toBeUndefined();
+  });
+
+  it("handles frontmatter with other fields before inject", () => {
+    expect(
+      parseInjectFrontmatter("---\ntitle: My File\ninject: heartbeat-only\n---\n# content"),
+    ).toBe("heartbeat-only");
+  });
+});
+
+describe("applyInjectModeFilter (via resolveBootstrapFilesForRun)", () => {
+  beforeEach(() => clearInternalHooks());
+  afterEach(() => clearInternalHooks());
+
+  it("includes files with no inject frontmatter (defaults to always)", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# SOUL\npersona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    expect(files.some((f) => f.name === "SOUL.md")).toBe(true);
+  });
+
+  it("excludes files with inject: never", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(
+      path.join(workspaceDir, "SOUL.md"),
+      "---\ninject: never\n---\n# SOUL\npersona",
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    expect(files.some((f) => f.name === "SOUL.md")).toBe(false);
+  });
+
+  it("includes inject: heartbeat-only files only in heartbeat runs", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      "---\ninject: heartbeat-only\n---\ncheck inbox",
+      "utf8",
+    );
+
+    const heartbeatFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "heartbeat",
+    });
+    expect(heartbeatFiles.some((f) => f.name === "HEARTBEAT.md")).toBe(true);
+
+    const defaultFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "default",
+    });
+    expect(defaultFiles.some((f) => f.name === "HEARTBEAT.md")).toBe(false);
+  });
+
+  it("includes inject: main-session-only files for regular sessions but not subagent sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "---\ninject: main-session-only\n---\n# Memory",
+      "utf8",
+    );
+
+    // Regular (main) session — no sessionKey
+    const mainFiles = await resolveBootstrapFilesForRun({ workspaceDir });
+    expect(mainFiles.some((f) => f.name === "MEMORY.md")).toBe(true);
+
+    // Subagent session key — should be filtered out
+    const subagentFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:subagent:abc123",
+    });
+    expect(subagentFiles.some((f) => f.name === "MEMORY.md")).toBe(false);
+  });
+
+  it("includes inject: main-session-only files but not for cron sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      "---\ninject: main-session-only\n---\n# Memory",
+      "utf8",
+    );
+
+    const cronFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:cron:job:run:xyz",
+    });
+    expect(cronFiles.some((f) => f.name === "MEMORY.md")).toBe(false);
+  });
+
+  it("includes inject: always files in every context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "---\ninject: always\n---\n# AGENTS\nrules",
+      "utf8",
+    );
+
+    const regularFiles = await resolveBootstrapFilesForRun({ workspaceDir });
+    expect(regularFiles.some((f) => f.name === "AGENTS.md")).toBe(true);
+
+    const heartbeatFiles = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "heartbeat",
+    });
+    expect(heartbeatFiles.some((f) => f.name === "AGENTS.md")).toBe(true);
+  });
+
+  it("ignores invalid inject values and defaults to always", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-inject-");
+    await fs.writeFile(
+      path.join(workspaceDir, "SOUL.md"),
+      "---\ninject: sometimes\n---\n# SOUL\npersona",
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    // Invalid inject → undefined → defaults to "always" → included
+    expect(files.some((f) => f.name === "SOUL.md")).toBe(true);
   });
 });

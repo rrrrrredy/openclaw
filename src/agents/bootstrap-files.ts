@@ -18,6 +18,7 @@ import {
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
+import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
@@ -181,6 +182,43 @@ function filterHeartbeatBootstrapFile(
   return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
+/**
+ * Filter bootstrap files based on their frontmatter `inject` field.
+ *
+ * | inject value        | included when                                    |
+ * |---------------------|--------------------------------------------------|
+ * | `always` (default)  | always                                           |
+ * | `heartbeat-only`    | `runKind === "heartbeat"` only                   |
+ * | `main-session-only` | not a subagent or cron session                   |
+ * | `never`             | never                                            |
+ */
+function applyInjectModeFilter(params: {
+  files: WorkspaceBootstrapFile[];
+  runKind?: BootstrapContextRunKind;
+  sessionKey?: string;
+}): WorkspaceBootstrapFile[] {
+  const runKind = params.runKind ?? "default";
+  const isSubagentOrCron =
+    params.sessionKey !== undefined &&
+    params.sessionKey !== null &&
+    (isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey));
+
+  return params.files.filter((file) => {
+    const mode = file.inject ?? "always";
+    if (mode === "never") {
+      return false;
+    }
+    if (mode === "heartbeat-only") {
+      return runKind === "heartbeat";
+    }
+    if (mode === "main-session-only") {
+      return !isSubagentOrCron;
+    }
+    // "always"
+    return true;
+  });
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -199,10 +237,14 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = applyContextModeFilter({
-    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
-    contextMode: params.contextMode,
+  const bootstrapFiles = applyInjectModeFilter({
+    files: applyContextModeFilter({
+      files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+      contextMode: params.contextMode,
+      runKind: params.runKind,
+    }),
     runKind: params.runKind,
+    sessionKey,
   });
 
   const updated = await applyBootstrapHookOverrides({
