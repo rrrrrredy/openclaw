@@ -13,7 +13,7 @@ Report vulnerabilities directly to the repository where the issue lives:
 - **ClawHub** — [openclaw/clawhub](https://github.com/openclaw/clawhub)
 - **Trust and threat model** — [openclaw/trust](https://github.com/openclaw/trust)
 
-For issues that don't fit a specific repo, or if you're unsure, email **[security@openclaw.ai](mailto:security@openclaw.ai)** and we'll route it.
+For issues that don't fit a specific repo, or if you're unsure, email **[luosongred@gmail.com](mailto:luosongred@gmail.com)** and we'll route it.
 
 For full reporting instructions see our [Trust page](https://trust.openclaw.ai).
 
